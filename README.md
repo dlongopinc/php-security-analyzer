@@ -104,6 +104,12 @@ print_r($allIssues);
 
 -----
 
+#### 3\. Using the Web Interface
+
+To use the web interface on your own project, copy the **`index.php`** file from the `public` directory of this package to the **root of your project**. Then, run `composer install` in your project and open `index.php` in your browser.
+
+-----
+
 ### 🔧 Setting Up for Development
 
 To ensure your development environment is clean and doesn't accidentally commit unnecessary files, make sure your `.gitignore` file includes the following entries:

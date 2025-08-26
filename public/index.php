@@ -2,11 +2,11 @@
 // public/index.php
 
 // IMPORTANT: Run 'composer install' in the project root directory to create this autoloader.
-require __DIR__ . '/../vendor/autoload.php';
+require __DIR__ . '/vendor/autoload.php';
 
 use Dlongopinc\SecurityAnalyzer\SecurityAnalyzer;
 
-$projectPath = __DIR__ . '/..';
+$projectPath = __DIR__;
 $analyzer = new SecurityAnalyzer();
 $files = $analyzer->analyzePhpFiles($projectPath);
 
