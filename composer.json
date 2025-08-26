@@ -1,0 +1,20 @@
+{
+  "name": "dlongopinc/php-security-analyzer",
+  "description": "A comprehensive static analysis tool to find potential security vulnerabilities in PHP code.",
+  "type": "library",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Riyan Setiyadi",
+      "email": "setiyariyan19@gmail.com",
+      "homepage": "https://www.linkedin.com/in/riyan-setiyadi-hidayatullah/",
+      "role": "Developer"
+    }
+  ],
+  "autoload": {
+    "psr-4": {
+      "Dlongopinc\\SecurityAnalyzer\\": "src/"
+    }
+  },
+  "require": {}
+}
