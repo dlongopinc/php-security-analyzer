@@ -65,6 +65,36 @@ class SecurityAnalyzer
             }
         }
 
+        // --- Integrate AST-based findings (PhpParser) to improve type heuristics ---
+        // If PhpParserAnalyzer is available, use it to mark variables that are arrays
+        try {
+            $parserAnalyzer = new PhpParserAnalyzer();
+            $astFindings = $parserAnalyzer->analyzeFile($file);
+            foreach ($astFindings as $f) {
+                if (!empty($f['error'])) continue;
+                if (empty($f['name'])) continue;
+                $name = $f['name'];
+                if (!isset($inputVars[$name])) {
+                    $inputVars[$name] = ["line" => $f['line'] ?? 0, "secured" => false];
+                }
+                if (!empty($f['is_array'])) {
+                    $inputVars[$name]['is_array'] = true;
+                    $inputVars[$name]['reasons'] = $f['reasons'] ?? [];
+                } else {
+                    // ensure key exists
+                    if (!isset($inputVars[$name]['is_array'])) {
+                        $inputVars[$name]['is_array'] = false;
+                    }
+                }
+                // if AST reports is_array via is_array() check, prefer that
+                if (!empty($f['reasons']) && in_array('checked with is_array()', $f['reasons'])) {
+                    $inputVars[$name]['is_array'] = true;
+                }
+            }
+        } catch (\Throwable $e) {
+            // fall back to original heuristics if parser fails or not installed
+        }
+
         // --- Step 2: Mark as "secured" if the variable is assigned from htmlspecialchars(...) ---
         foreach ($lines as $num => $lineRaw) {
             $line = trim($lineRaw);
@@ -93,6 +123,10 @@ class SecurityAnalyzer
                 $v = preg_quote($var, '/');
 
                 if (preg_match('/^\s*\$(' . $v . ')\b\s*=\s*(\$_(?:POST|GET|REQUEST|COOKIE|SESSION)(?:\s*\[[^\]]+\])*)(\s*;.*)?$/', $line, $m2)) {
+                    // if AST indicates this variable is an array, don't suggest wrapping whole var
+                    if (!empty($info['is_array'])) {
+                        continue;
+                    }
                     $rhs = $m2[2];
                     $tail = isset($m2[3]) ? $m2[3] : ';';
                     $suggestedFix = '$' . $var . ' = htmlspecialchars(' . $rhs . ')' . $tail;
@@ -101,6 +135,13 @@ class SecurityAnalyzer
                 }
 
                 if ($info["secured"]) continue;
+                // if AST says this variable is an array, skip suggestions that would wrap the whole variable
+                if (!empty($info['is_array'])) {
+                    // allow suggestions for element access or implode(...) but skip plain $var usage
+                    if (preg_match('/\$' . $v . '(?![\w\[]|->)/', $line)) {
+                        continue;
+                    }
+                }
                 if (preg_match('/\bforeach\s*\([^)]*\$(' . $v . ')\b/', $line)) continue;
                 if (preg_match('/\barray_keys\s*\(\s*\$(' . $v . ')(?:\s*\[[^\)]*\])?\s*\)/', $line)) continue;
                 if (preg_match('/\bhtmlspecialchars\s*\([^)]*\$' . $v . '[^)]*\)/', $line)) continue;

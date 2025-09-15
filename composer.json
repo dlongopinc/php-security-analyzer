@@ -16,5 +16,7 @@
       "Dlongopinc\\SecurityAnalyzer\\": "src/"
     }
   },
-  "require": {}
+  "require": {
+    "nikic/php-parser": "^4.15"
+  }
 }

@@ -1,0 +1,23 @@
+/vendor
+/composer.lock
+/.env
+/.env.local
+/.vscode
+/.idea
+/node_modules
+/.DS_Store
+/Thumbs.db
+*.log
+tmp/
+*.cache
+.phpunit.result.cache
+.php_cs.cache
+# Optional: ignore coverage and build artifacts
+coverage/
+build/
+
+# Ignore OS files
+desktop.ini
+
+# Composer artifact
+composer.phar
