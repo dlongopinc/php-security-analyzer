@@ -168,6 +168,44 @@ class SecurityAnalyzer
         $trimmedLine = rtrim($line);
         $v = preg_quote($var, '/');
 
+        // If the only occurrence(s) of the variable on this line are inside
+        // a function/closure/arrow parameter list, don't suggest wrapping it
+        // with htmlspecialchars because that would produce invalid PHP like
+        // `function(htmlspecialchars($param)) {}`.
+        // We look for patterns like: function(...$var..., ...) or fn(...$var...) or method signatures.
+        // Safer check: find all occurrences of the variable and determine
+        // whether each occurrence is inside a parentheses pair that looks
+        // like a function/closure/arrow parameter list. This avoids building
+        // large regexes which can fail to compile on some inputs.
+        $occurrences = [];
+        $search = '$' . $var;
+        $offset = 0;
+        while (($pos = strpos($trimmedLine, $search, $offset)) !== false) {
+            $occurrences[] = $pos;
+            $offset = $pos + strlen($search);
+        }
+
+        if (!empty($occurrences)) {
+            $totalCount = count($occurrences);
+            $inParamCount = 0;
+            foreach ($occurrences as $pos) {
+                // find nearest opening '(' before the var and closing ')' after it
+                $open = strrpos(substr($trimmedLine, 0, $pos), '(');
+                $close = strpos($trimmedLine, ')', $pos);
+                if ($open !== false && $close !== false && $open < $pos && $close > $pos) {
+                    // check a bit of text before the '(' to see if it's a function-like context
+                    $before = substr($trimmedLine, max(0, $open - 40), min(40, $open));
+                    if (preg_match('/\b(function|fn|public|protected|private|static)\b/i', $before)) {
+                        $inParamCount++;
+                    }
+                }
+            }
+
+            if ($inParamCount > 0 && $inParamCount === $totalCount) {
+                return $trimmedLine;
+            }
+        }
+
         if (preg_match('/\bhtmlspecialchars\s*\([^)]*\$' . $v . '(?:\s*\[[^\)]*\])?/i', $trimmedLine)) {
             return $trimmedLine;
         }
