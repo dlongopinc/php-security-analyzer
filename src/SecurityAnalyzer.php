@@ -129,7 +129,14 @@ class SecurityAnalyzer
                     }
                     $rhs = $m2[2];
                     $tail = isset($m2[3]) ? $m2[3] : ';';
-                    $suggestedFix = '$' . $var . ' = htmlspecialchars(' . $rhs . ')' . $tail;
+                    // Do not recommend calling htmlspecialchars() inline for DB binding
+                    // Prepared statements handle SQL escaping; htmlspecialchars is for HTML output.
+                    // Suggest keeping the assignment and applying htmlspecialchars() at output time,
+                    // or if the developer truly wants HTML-escaped value before storage, assign it
+                    // to the variable first and then bind that variable (not call htmlspecialchars() inside bind_param()).
+                    $suggestedFix = '$' . $var . ' = ' . $rhs . $tail
+                        . "\n// Note: use htmlspecialchars() when rendering to HTML, not when binding to the database.\n"
+                        . "// If you must escape before storage: $" . $var . " = htmlspecialchars($" . $var . ");";
                     $issues[] = ["line" => $num + 1, "var" => $var, "code" => trim($line), "fix" => $suggestedFix];
                     continue;
                 }
@@ -148,6 +155,19 @@ class SecurityAnalyzer
 
                 $suggestedFix = $this->generateFixSuggestion($line, $var);
                 if (trim($suggestedFix) === trim($line)) continue;
+
+                // Skip suggestions if the variable is used inside bind_param(...) on this line
+                if (preg_match('/bind_param\s*\(/i', $line)) {
+                    $start = stripos($line, 'bind_param');
+                    $parenPos = strpos($line, '(', $start);
+                    $closePos = strrpos($line, ')');
+                    if ($parenPos !== false && $closePos !== false && $closePos > $parenPos) {
+                        $inside = substr($line, $parenPos + 1, $closePos - $parenPos - 1);
+                        if (strpos($inside, '$' . $var) !== false) {
+                            continue;
+                        }
+                    }
+                }
 
                 $issues[] = ["line" => $num + 1, "var" => $var, "code" => trim($line), "fix" => $suggestedFix];
             }
