@@ -265,6 +265,14 @@ class SecurityAnalyzer
             if ($repl !== null && $repl !== $trimmedLine) return $repl;
         }
 
+        // Don't attempt to replace variables that appear inside constructs that require a variable, e.g.
+        // isset(...), empty(...), unset(...) or similar contexts where calling a function would produce
+        // "Can't use function/method return value in write context" or invalid code.
+        // This must match forms like: isset($var), isset($parts[1]), isset($obj->prop) (we primarily handle array/indexed forms).
+        if (preg_match('/\b(?:isset|empty|unset)\s*\([^)]*\$' . $v . '(?:\s*\[[^\]]+\])?[^)]*\)/i', $trimmedLine)) {
+            return $trimmedLine;
+        }
+
         if (preg_match('/\bhtmlspecialchars\s*\([^)]*\$' . $v . '(?:\s*\[[^\)]*\])?/i', $trimmedLine)) {
             return $trimmedLine;
         }
