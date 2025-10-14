@@ -257,6 +257,14 @@ class SecurityAnalyzer
             }
         }
 
+        // Handle associative array elements like: 'key' => $var
+        // Replace the RHS variable with htmlspecialchars($var) while preserving spacing and the '=>' operator.
+        if (preg_match('/([\'\"][^\'\"]+[\'\"])(\s*=>\s*)(\$' . $v . ')(\s*(?:,|\]|\)|;|$))/i', $trimmedLine)) {
+            // Capture the exact spacing around the => operator and reuse it in the replacement
+            $repl = preg_replace('/([\'\"][^\'\"]+[\'\"])(\s*=>\s*)\$' . $v . '(\s*(?:,|\]|\)|;|$))/i', '$1$2htmlspecialchars($' . $var . ')$3', $trimmedLine);
+            if ($repl !== null && $repl !== $trimmedLine) return $repl;
+        }
+
         if (preg_match('/\bhtmlspecialchars\s*\([^)]*\$' . $v . '(?:\s*\[[^\)]*\])?/i', $trimmedLine)) {
             return $trimmedLine;
         }
