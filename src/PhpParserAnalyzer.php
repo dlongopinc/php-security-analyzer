@@ -29,11 +29,47 @@ class PhpParserAnalyzer
 
         $visitor = new class($printer) extends NodeVisitorAbstract {
             private $printer;
-            public $findings = [];
+            public $varFindings = [];
+            public $calls = [];
+            public $usages = []; // write-contexts and similar
 
             public function __construct(PrettyPrinter $printer)
             {
                 $this->printer = $printer;
+            }
+
+            private function collectVarsFromExpr($expr)
+            {
+                $vars = [];
+                if ($expr instanceof Node\Expr\Variable && is_string($expr->name)) {
+                    $vars[] = $expr->name;
+                }
+                if ($expr instanceof Node\Expr\ArrayDimFetch) {
+                    $vars = array_merge($vars, $this->collectVarsFromExpr($expr->var));
+                    if ($expr->dim !== null) {
+                        $vars = array_merge($vars, $this->collectVarsFromExpr($expr->dim));
+                    }
+                }
+                if ($expr instanceof Node\Expr\PropertyFetch) {
+                    // $obj->prop — treat as variable usage of the property root if variable
+                    $vars = array_merge($vars, $this->collectVarsFromExpr($expr->var));
+                }
+                if ($expr instanceof Node\Expr\FuncCall || $expr instanceof Node\Expr\MethodCall || $expr instanceof Node\Expr\StaticCall) {
+                    // examine args
+                    foreach ($expr->args as $a) {
+                        $vars = array_merge($vars, $this->collectVarsFromExpr($a->value));
+                    }
+                }
+                if ($expr instanceof Node\Expr\BinaryOp) {
+                    $vars = array_merge($vars, $this->collectVarsFromExpr($expr->left));
+                    $vars = array_merge($vars, $this->collectVarsFromExpr($expr->right));
+                }
+                if ($expr instanceof Node\Expr\Ternary) {
+                    $vars = array_merge($vars, $this->collectVarsFromExpr($expr->cond));
+                    if ($expr->if) $vars = array_merge($vars, $this->collectVarsFromExpr($expr->if));
+                    $vars = array_merge($vars, $this->collectVarsFromExpr($expr->else));
+                }
+                return array_filter(array_unique($vars));
             }
 
             public function enterNode(Node $node)
@@ -76,9 +112,7 @@ class PhpParserAnalyzer
                             }
                         }
 
-                        // If right-hand side is new \ SomeClass() and it's annotated or known - skip (unknown)
-
-                        $this->findings[] = [
+                        $this->varFindings[] = [
                             'name' => $name,
                             'line' => $node->getLine(),
                             'is_array' => $isArray,
@@ -92,7 +126,7 @@ class PhpParserAnalyzer
                 if ($node instanceof Node\Stmt\Foreach_) {
                     $expr = $node->expr;
                     if ($expr instanceof Node\Expr\Variable && is_string($expr->name)) {
-                        $this->findings[] = [
+                        $this->varFindings[] = [
                             'name' => $expr->name,
                             'line' => $node->getLine(),
                             'is_array' => true,
@@ -102,12 +136,42 @@ class PhpParserAnalyzer
                     }
                 }
 
+                // Detect calls: function calls, method calls, static calls
+                if ($node instanceof Node\Expr\FuncCall && $node->name instanceof Node\Name) {
+                    $fname = strtolower($node->name->toString());
+                    $vars = [];
+                    foreach ($node->args as $a) {
+                        $vars = array_merge($vars, $this->collectVarsFromExpr($a->value));
+                    }
+                    $this->calls[] = ['type' => 'function', 'name' => $fname, 'line' => $node->getLine(), 'args' => array_map(function($a){ return $this->printer->prettyPrintExpr($a->value); }, $node->args), 'vars' => array_values(array_unique($vars))];
+                }
+
+                if ($node instanceof Node\Expr\MethodCall) {
+                    $mname = null;
+                    if ($node->name instanceof Node\Identifier) $mname = $node->name->toString();
+                    $vars = [];
+                    foreach ($node->args as $a) {
+                        $vars = array_merge($vars, $this->collectVarsFromExpr($a->value));
+                    }
+                    $this->calls[] = ['type' => 'method', 'name' => $mname, 'line' => $node->getLine(), 'args' => array_map(function($a){ return $this->printer->prettyPrintExpr($a->value); }, $node->args), 'vars' => array_values(array_unique($vars))];
+                }
+
+                if ($node instanceof Node\Expr\StaticCall) {
+                    $mname = null;
+                    if ($node->name instanceof Node\Identifier) $mname = $node->name->toString();
+                    $vars = [];
+                    foreach ($node->args as $a) {
+                        $vars = array_merge($vars, $this->collectVarsFromExpr($a->value));
+                    }
+                    $this->calls[] = ['type' => 'static', 'name' => $mname, 'line' => $node->getLine(), 'args' => array_map(function($a){ return $this->printer->prettyPrintExpr($a->value); }, $node->args), 'vars' => array_values(array_unique($vars))];
+                }
+
                 // Detect calls to is_array($var)
                 if ($node instanceof Node\Expr\FuncCall && $node->name instanceof Node\Name && strtolower($node->name->toString()) === 'is_array') {
                     if (!empty($node->args)) {
                         $argVal = $node->args[0]->value;
                         if ($argVal instanceof Node\Expr\Variable && is_string($argVal->name)) {
-                            $this->findings[] = [
+                            $this->varFindings[] = [
                                 'name' => $argVal->name,
                                 'line' => $node->getLine(),
                                 'is_array' => true,
@@ -117,6 +181,24 @@ class PhpParserAnalyzer
                         }
                     }
                 }
+
+                // Detect write-contexts: isset(), empty(), unset(), inc/dec
+                if ($node instanceof Node\Expr\Isset_) {
+                    foreach ($node->vars as $v) {
+                        $this->usages[] = ['type' => 'isset', 'line' => $node->getLine(), 'vars' => $this->collectVarsFromExpr($v)];
+                    }
+                }
+                if ($node instanceof Node\Expr\Empty_) {
+                    $this->usages[] = ['type' => 'empty', 'line' => $node->getLine(), 'vars' => $this->collectVarsFromExpr($node->expr)];
+                }
+                if ($node instanceof Node\Stmt\Unset_) {
+                    foreach ($node->vars as $v) {
+                        $this->usages[] = ['type' => 'unset', 'line' => $node->getLine(), 'vars' => $this->collectVarsFromExpr($v)];
+                    }
+                }
+                if ($node instanceof Node\Expr\PreInc || $node instanceof Node\Expr\PostInc || $node instanceof Node\Expr\PreDec || $node instanceof Node\Expr\PostDec) {
+                    $this->usages[] = ['type' => 'incdec', 'line' => $node->getLine(), 'vars' => $this->collectVarsFromExpr($node->var)];
+                }
             }
         };
 
@@ -125,7 +207,11 @@ class PhpParserAnalyzer
         try {
             $ast = $parser->parse($code);
             $traverser->traverse($ast);
-            return $visitor->findings;
+            return [
+                'vars' => $visitor->varFindings,
+                'calls' => $visitor->calls,
+                'usages' => $visitor->usages,
+            ];
         } catch (Error $e) {
             return [
                 ['error' => 'parse_error', 'message' => $e->getMessage()]
