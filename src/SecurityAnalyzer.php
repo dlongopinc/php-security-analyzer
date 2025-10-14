@@ -44,6 +44,7 @@ class SecurityAnalyzer
 
         $lines = explode("\n", $content);
         $issues = [];
+        $lineTargets = []; // line number => ['code' => string, 'vars' => []]
         $inputVars = [];
 
         // --- Step 1: Detect candidate variables from superglobals & foreach ---
@@ -137,7 +138,13 @@ class SecurityAnalyzer
                     $suggestedFix = '$' . $var . ' = ' . $rhs . $tail
                         . "\n// Note: use htmlspecialchars() when rendering to HTML, not when binding to the database.\n"
                         . "// If you must escape before storage: $" . $var . " = htmlspecialchars($" . $var . ");";
-                    $issues[] = ["line" => $num + 1, "var" => $var, "code" => trim($line), "fix" => $suggestedFix];
+                    $ln = $num + 1;
+                    if (!isset($lineTargets[$ln])) {
+                        $lineTargets[$ln] = ['code' => trim($line), 'vars' => []];
+                    }
+                    if (!in_array($var, $lineTargets[$ln]['vars'], true)) {
+                        $lineTargets[$ln]['vars'][] = $var;
+                    }
                     continue;
                 }
 
@@ -169,7 +176,31 @@ class SecurityAnalyzer
                     }
                 }
 
-                $issues[] = ["line" => $num + 1, "var" => $var, "code" => trim($line), "fix" => $suggestedFix];
+                $ln = $num + 1;
+                if (!isset($lineTargets[$ln])) {
+                    $lineTargets[$ln] = ['code' => trim($line), 'vars' => []];
+                }
+                if (!in_array($var, $lineTargets[$ln]['vars'], true)) {
+                    $lineTargets[$ln]['vars'][] = $var;
+                }
+            }
+        }
+
+        // Merge collected targets into single issues per line
+        foreach ($lineTargets as $ln => $info) {
+            $vars = $info['vars'];
+            $code = $info['code'];
+            // Build a merged fix: apply generateFixSuggestion for each var in sequence on the original code
+            $merged = $code;
+            foreach ($vars as $v) {
+                $candidate = $this->generateFixSuggestion($merged, $v);
+                // only accept candidate if it changed from previous; update merged for next var
+                if (trim($candidate) !== trim($merged)) {
+                    $merged = $candidate;
+                }
+            }
+            if (trim($merged) !== trim($code)) {
+                $issues[] = ['line' => $ln, 'var' => implode(',', $vars), 'code' => $code, 'fix' => $merged];
             }
         }
 
