@@ -199,6 +199,15 @@ class PhpParserAnalyzer
                 if ($node instanceof Node\Expr\PreInc || $node instanceof Node\Expr\PostInc || $node instanceof Node\Expr\PreDec || $node instanceof Node\Expr\PostDec) {
                     $this->usages[] = ['type' => 'incdec', 'line' => $node->getLine(), 'vars' => $this->collectVarsFromExpr($node->var)];
                 }
+                    // Detect return statements and record returned variable(s)
+                    if ($node instanceof Node\Stmt\Return_) {
+                        if ($node->expr !== null) {
+                            $vars = $this->collectVarsFromExpr($node->expr);
+                            if (!empty($vars)) {
+                                $this->usages[] = ['type' => 'return', 'line' => $node->getLine(), 'vars' => $vars];
+                            }
+                        }
+                    }
             }
         };
 

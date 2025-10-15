@@ -212,6 +212,10 @@ class SecurityAnalyzer
 
                 if ($isBindParamArg) continue;
 
+                // return statements are now detected via AST (PhpParserAnalyzer)
+                // and will appear in $astUsages as type 'return'. The generic
+                // astUsages loop below will skip suggestions for those lines.
+
                 $ln = $num + 1;
                 if (!isset($lineTargets[$ln])) {
                     $lineTargets[$ln] = ['code' => trim($line), 'vars' => []];
@@ -253,7 +257,16 @@ class SecurityAnalyzer
                 $prepared .= "\$result = \$stmt->get_result(); // or bind_result/fetch if get_result not available\n";
                 $prepared .= "\$stmt->close();";
 
-                $issues[] = ['line' => $ln, 'var' => implode(',', $vars), 'code' => $code, 'fix' => $prepared];
+                // format var list as plain comma-separated names (no leading '$')
+                $formattedVarList = '';
+                if (count($vars) > 0) {
+                    $first = array_shift($vars);
+                    $formattedVarList = $first;
+                    if (count($vars) > 0) {
+                        $formattedVarList .= ',' . implode(',', $vars);
+                    }
+                }
+                $issues[] = ['line' => $ln, 'var' => $formattedVarList, 'code' => $code, 'fix' => $prepared];
                 continue;
             }
 
@@ -266,9 +279,19 @@ class SecurityAnalyzer
                     $merged = $candidate;
                 }
             }
-            if (trim($merged) !== trim($code)) {
-                $issues[] = ['line' => $ln, 'var' => implode(',', $vars), 'code' => $code, 'fix' => $merged];
-            }
+                if (trim($merged) !== trim($code)) {
+                    // format var list as plain comma-separated names (no leading '$')
+                    $tmp = $vars;
+                    $formattedVarList2 = '';
+                    if (count($tmp) > 0) {
+                        $first2 = array_shift($tmp);
+                        $formattedVarList2 = $first2;
+                        if (count($tmp) > 0) {
+                            $formattedVarList2 .= ',' . implode(',', $tmp);
+                        }
+                    }
+                    $issues[] = ['line' => $ln, 'var' => $formattedVarList2, 'code' => $code, 'fix' => $merged];
+                }
         }
 
         return $issues;

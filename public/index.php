@@ -132,6 +132,25 @@ foreach ($files as $file) {
         .issue-count {
             background: linear-gradient(45deg, #ff6b6b, #ee5a52);
         }
+        /* Table layout improvements: fixed layout and constrained columns */
+        table.fixed-table {
+            table-layout: fixed;
+            width: 100%;
+        }
+
+        /* Constrain the code and fix columns and make them scrollable */
+        .code-cell, .fix-cell {
+            max-width: 1px; /* allow the cell to shrink and overflow horizontally */
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        .code-block, .fix-block {
+            max-height: 6.5rem; /* approx 4-6 lines depending on font */
+            overflow: auto;
+            white-space: pre; /* preserve formatting inside the blocks */
+        }
     </style>
 </head>
 
@@ -209,20 +228,41 @@ foreach ($files as $file) {
                             </div>
                             <div class="card-body p-0">
                                 <div class="table-responsive">
-                                    <table class="table mb-0">
+                                    <table class="table mb-0 fixed-table">
+                                        <colgroup>
+                                            <col style="width:6%">
+                                            <col style="width:12%">
+                                            <col style="width:41%">
+                                            <col style="width:41%">
+                                        </colgroup>
                                         <thead class="table-dark">
-                                            <tr>
-                                                <th scope="col" width="80"><i class="bi bi-hash"></i> Line</th>
-                                                <th scope="col" width="120"><i class="bi bi-code-slash"></i> Variable</th>
-                                                <th scope="col" width="40%"><i class="bi bi-exclamation-triangle"></i> Vulnerable Code</th>
-                                                <th scope="col" width="40%"><i class="bi bi-check-circle"></i> Suggested Fix</th>
-                                            </tr>
+                                                    <tr>
+                                                        <th scope="col"><i class="bi bi-hash"></i> Line</th>
+                                                        <th scope="col"><i class="bi bi-code-slash"></i> Variable</th>
+                                                        <th scope="col"><i class="bi bi-exclamation-triangle"></i> Vulnerable Code</th>
+                                                        <th scope="col"><i class="bi bi-check-circle"></i> Suggested Fix</th>
+                                                    </tr>
                                         </thead>
                                         <tbody>
                                             <?php foreach ($issues as $issue) : ?>
                                                 <tr>
                                                     <td><span class="badge badge-line text-white fs-6"><?= $issue['line'] ?></span></td>
-                                                    <td><code class="badge badge-var text-white fs-6">$<?= htmlspecialchars($issue['var']) ?></code></td>
+                                                    <?php
+                                                    // Render the variable column so only the first variable has a leading '$'.
+                                                    $rawVar = $issue['var'] ?? '';
+                                                    // Normalize: remove any leading '$' characters that might come from analyzer
+                                                    $clean = trim($rawVar);
+                                                    $clean = ltrim($clean, '$');
+                                                    // split names, trim spaces and drop empties
+                                                    $parts = array_values(array_filter(array_map('trim', explode(',', $clean)), function($p){ return $p !== ''; }));
+                                                    // Prefix a '$' to every variable and join with no spaces after commas
+                                                    if (!empty($parts)) {
+                                                        $displayVar = '$' . implode(',$', $parts);
+                                                    } else {
+                                                        $displayVar = '';
+                                                    }
+                                                    ?>
+                                                    <td><code class="badge badge-var text-white fs-6"><?= htmlspecialchars($displayVar) ?></code></td>
                                                     <td>
                                                         <div class="code-block p-3 rounded"><code><?= htmlspecialchars($issue['code']) ?></code></div>
                                                     </td>
