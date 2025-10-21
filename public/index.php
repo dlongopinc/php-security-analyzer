@@ -8,12 +8,16 @@ use Dlongopinc\SecurityAnalyzer\SecurityAnalyzer;
 
 $projectPath = __DIR__;
 $analyzer = new SecurityAnalyzer();
-$files = $analyzer->analyzePhpFiles($projectPath);
 
-$found = false;
-$totalIssues = 0;
-$fileCount = 0;
-$analyzedFiles = count($files);
+try {
+    $files = $analyzer->analyzePhpFiles($projectPath);
+    $found = false;
+    $totalIssues = 0;
+    $fileCount = 0;
+    $analyzedFiles = count($files);
+} catch (\Exception $e) {
+    die('Error analyzing files: ' . htmlspecialchars($e->getMessage()));
+}
 
 $fileIssues = [];
 foreach ($files as $file) {
@@ -84,10 +88,18 @@ foreach ($files as $file) {
 
         .copy-btn {
             transition: all 0.3s ease;
+            align-self: flex-start;
+            padding: 0.375rem 0.5rem;
+            margin-top: 0.5rem;
         }
 
         .copy-btn:hover {
             transform: scale(1.05);
+        }
+
+        .code-block,
+        .fix-block {
+            min-height: 3rem;
         }
 
         .table-hover tbody tr:hover {
@@ -100,6 +112,8 @@ foreach ($files as $file) {
 
         .badge-var {
             background: linear-gradient(45deg, #dc3545, #fd7e14);
+            display: inline-block;
+            margin-bottom: 0.25rem;
         }
 
         .vulnerability-icon {
@@ -132,24 +146,50 @@ foreach ($files as $file) {
         .issue-count {
             background: linear-gradient(45deg, #ff6b6b, #ee5a52);
         }
+
+        /* Row background colors by recommendation type */
+        .table>tbody>tr.type-sql_injection,
+        .table>tbody>tr.type-sql_injection>td {
+            background-color: #f8d7da !important;
+            /* Merah muda untuk SQL injection */
+        }
+
+        .table>tbody>tr.type-html_output,
+        .table>tbody>tr.type-html_output>td {
+            background-color: #d1ecf1 !important;
+            /* Biru muda untuk HTML output */
+        }
+
+        .table>tbody>tr.type-unnecessary_htmlspecialchars,
+        .table>tbody>tr.type-unnecessary_htmlspecialchars>td {
+            background-color: #fff3cd !important;
+            /* Kuning muda untuk unnecessary htmlspecialchars */
+        }
+
+        .table>tbody>tr.type-parse_error,
+        .table>tbody>tr.type-parse_error>td {
+            background-color: #e2e3e5 !important;
+            /* Abu-abu muda untuk parse error */
+        }
+
+        .table>tbody>tr.type-other,
+        .table>tbody>tr.type-other>td {
+            background-color: #f8f9fa !important;
+            /* Abu-abu sangat muda untuk tipe lainnya */
+        }
+
         /* Table layout improvements: fixed layout and constrained columns */
         table.fixed-table {
             table-layout: fixed;
             width: 100%;
         }
 
-        /* Constrain the code and fix columns and make them scrollable */
-        .code-cell, .fix-cell {
-            max-width: 1px; /* allow the cell to shrink and overflow horizontally */
-            overflow: hidden;
-            white-space: nowrap;
-            text-overflow: ellipsis;
-        }
-
-        .code-block, .fix-block {
-            max-height: 6.5rem; /* approx 4-6 lines depending on font */
-            overflow: auto;
-            white-space: pre; /* preserve formatting inside the blocks */
+        /* Code and fix blocks styling */
+        .code-block,
+        .fix-block {
+            background: #f8f9fa;
+            padding: 0.5rem;
+            border-radius: 4px;
         }
     </style>
 </head>
@@ -215,6 +255,39 @@ foreach ($files as $file) {
                     </div>
                 </div>
             </div>
+            <?php
+            function getRecommendationType($issue)
+            {
+                if (isset($issue['type'])) {
+                    return $issue['type'];
+                }
+                if (isset($issue['message'])) {
+                    if (strpos($issue['message'], 'prepared statements') !== false) {
+                        return 'sql_injection';
+                    }
+                    if (strpos($issue['message'], 'htmlspecialchars') !== false) {
+                        return 'html_output';
+                    }
+                }
+                if (isset($issue['error']) && $issue['error'] === 'parse_error') {
+                    return 'parse_error';
+                }
+                // Tambahan pengecekan untuk menentukan tipe berdasarkan kode atau konteks
+                if (isset($issue['code'])) {
+                    if (
+                        preg_match('/\b(?:SELECT|INSERT|UPDATE|DELETE)\b/i', $issue['code']) ||
+                        stripos($issue['code'], 'mysqli_query') !== false ||
+                        stripos($issue['code'], '->query(') !== false
+                    ) {
+                        return 'sql_injection';
+                    }
+                    if (stripos($issue['code'], 'htmlspecialchars') !== false) {
+                        return 'html_output';
+                    }
+                }
+                return 'other';
+            }
+            ?>
             <?php foreach ($fileIssues as $file => $issues) : ?>
                 <div class="row mb-4">
                     <div class="col-12">
@@ -230,44 +303,65 @@ foreach ($files as $file) {
                                 <div class="table-responsive">
                                     <table class="table mb-0 fixed-table">
                                         <colgroup>
-                                            <col style="width:6%">
                                             <col style="width:12%">
-                                            <col style="width:41%">
-                                            <col style="width:41%">
+                                            <col style="width:8%">
+                                            <col style="width:40%">
+                                            <col style="width:40%">
                                         </colgroup>
                                         <thead class="table-dark">
-                                                    <tr>
-                                                        <th scope="col"><i class="bi bi-hash"></i> Line</th>
-                                                        <th scope="col"><i class="bi bi-code-slash"></i> Variable</th>
-                                                        <th scope="col"><i class="bi bi-exclamation-triangle"></i> Vulnerable Code</th>
-                                                        <th scope="col"><i class="bi bi-check-circle"></i> Suggested Fix</th>
-                                                    </tr>
+                                            <tr>
+                                                <th scope="col"><i class="bi bi-tag"></i> Type</th>
+                                                <th scope="col"><i class="bi bi-hash"></i> Line</th>
+                                                <th scope="col"><i class="bi bi-exclamation-triangle"></i> Issue</th>
+                                                <th scope="col"><i class="bi bi-check-circle"></i> Recommendation</th>
+                                            </tr>
                                         </thead>
                                         <tbody>
-                                            <?php foreach ($issues as $issue) : ?>
-                                                <tr>
-                                                    <td><span class="badge badge-line text-white fs-6"><?= $issue['line'] ?></span></td>
-                                                    <?php
-                                                    // Render the variable column so only the first variable has a leading '$'.
-                                                    $rawVar = $issue['var'] ?? '';
-                                                    // Normalize: remove any leading '$' characters that might come from analyzer
-                                                    $clean = trim($rawVar);
-                                                    $clean = ltrim($clean, '$');
-                                                    // split names, trim spaces and drop empties
-                                                    $parts = array_values(array_filter(array_map('trim', explode(',', $clean)), function($p){ return $p !== ''; }));
-                                                    // Prefix a '$' to every variable and join with no spaces after commas
-                                                    if (!empty($parts)) {
-                                                        $displayVar = '$' . implode(',$', $parts);
-                                                    } else {
-                                                        $displayVar = '';
-                                                    }
-                                                    ?>
-                                                    <td><code class="badge badge-var text-white fs-6"><?= htmlspecialchars($displayVar) ?></code></td>
+                                            <?php foreach ($issues as $issue) :
+                                                $type = getRecommendationType($issue);
+                                            ?>
+                                                <tr class="type-<?= htmlspecialchars($type) ?>">
+                                                    <td><?= ucfirst(str_replace('_', ' ', $type)) ?></td>
+                                                    <td><span class="badge bg-secondary"><?= $issue['line'] ?></span></td>
                                                     <td>
-                                                        <div class="code-block p-3 rounded"><code><?= htmlspecialchars($issue['code']) ?></code></div>
+                                                        <div class="code-block p-3 rounded">
+                                                            <code><?= htmlspecialchars($issue['code'] ?? $issue['message']) ?></code>
+                                                            <?php if (isset($issue['var'])): ?>
+                                                                <div class="mt-2">
+                                                                    <?php
+                                                                    $rawVar = $issue['var'];
+                                                                    $clean = trim($rawVar);
+                                                                    $clean = ltrim($clean, '$');
+                                                                    $parts = array_values(array_filter(array_map('trim', explode(',', $clean)), function ($p) {
+                                                                        return $p !== '';
+                                                                    }));
+                                                                    if (!empty($parts)) {
+                                                                        foreach ($parts as $part) {
+                                                                            echo '<code class="badge badge-var text-white fs-6 me-1">$' . htmlspecialchars($part) . '</code>';
+                                                                        }
+                                                                    }
+                                                                    ?>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                        </div>
                                                     </td>
                                                     <td>
-                                                        <div class="fix-block p-3 rounded position-relative"><code id="fix_<?= md5($file . $issue['line'] . $issue['var']) ?>"><?= htmlspecialchars($issue['fix']) ?></code><button class="btn btn-success btn-sm copy-btn position-absolute top-0 end-0 m-2" onclick="copyToClipboard('fix_<?= md5($file . $issue['line'] . $issue['var']) ?>')" data-bs-toggle="tooltip" data-bs-placement="top" title="Copy fix code"><i class="bi bi-clipboard"></i></button></div>
+                                                        <div class="d-flex align-items-start gap-2">
+                                                            <div class="fix-block p-3 rounded flex-grow-1">
+                                                                <?php if (isset($issue['suggestion'])): ?>
+                                                                    <code id="fix_<?= md5($file . $issue['line'] . ($issue['var'] ?? '')) ?>"><?= htmlspecialchars($issue['suggestion']) ?></code>
+                                                                <?php elseif (isset($issue['fix'])): ?>
+                                                                    <code id="fix_<?= md5($file . $issue['line'] . ($issue['var'] ?? '')) ?>"><?= htmlspecialchars($issue['fix']) ?></code>
+                                                                <?php else: ?>
+                                                                    <code><?= htmlspecialchars($issue['message']) ?></code>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                            <?php if (isset($issue['suggestion']) || isset($issue['fix'])): ?>
+                                                                <button class="btn btn-outline-success btn-sm copy-btn" onclick="copyToClipboard('fix_<?= md5($file . $issue['line'] . ($issue['var'] ?? '')) ?>')" data-bs-toggle="tooltip" data-bs-placement="top" title="Copy fix code">
+                                                                    <i class="bi bi-clipboard"></i>
+                                                                </button>
+                                                            <?php endif; ?>
+                                                        </div>
                                                     </td>
                                                 </tr>
                                             <?php endforeach; ?>

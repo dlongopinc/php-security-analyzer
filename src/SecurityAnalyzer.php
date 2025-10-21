@@ -52,18 +52,9 @@ class SecurityAnalyzer
             $line = trim($lineRaw);
             if (preg_match('/^\s*(\/\/|#|\/\*|\*|\*\/|<)/', $line)) continue;
 
-            if (preg_match('/\$(\w+)\s*=\s*\$_(POST|GET|REQUEST|COOKIE|SESSION)\b/', $line, $m)) {
-                $inputVars[$m[1]] = ["line" => $num + 1, "secured" => false];
-            }
+            // Superglobal detection now handled by PhpParserAnalyzer
 
-            if (preg_match('/\bforeach\s*\([^)]*\s+as\s+\$(\w+)(?:\s*=>\s*\$(\w+))?/', $line, $m)) {
-                if (!empty($m[1]) && !isset($inputVars[$m[1]])) {
-                    $inputVars[$m[1]] = ["line" => $num + 1, "secured" => false];
-                }
-                if (!empty($m[2]) && !isset($inputVars[$m[2]])) {
-                    $inputVars[$m[2]] = ["line" => $num + 1, "secured" => false];
-                }
-            }
+            // foreach detection now handled by PhpParserAnalyzer
         }
 
         // --- Integrate AST-based findings (PhpParser) to improve type heuristics and detect call/usages ---
@@ -78,7 +69,10 @@ class SecurityAnalyzer
                     if (empty($f['name'])) continue;
                     $name = $f['name'];
                     if (!isset($inputVars[$name])) {
-                        $inputVars[$name] = ["line" => $f['line'] ?? 0, "secured" => false];
+                        $inputVars[$name] = [
+                            "line" => $f['line'] ?? 0,
+                            "secured" => false
+                        ];
                     }
                     if (!empty($f['is_array'])) {
                         $inputVars[$name]['is_array'] = true;
@@ -86,6 +80,40 @@ class SecurityAnalyzer
                     } else {
                         if (!isset($inputVars[$name]['is_array'])) {
                             $inputVars[$name]['is_array'] = false;
+                        }
+                    }
+                }
+            }
+
+            // Update secured status from AST findings and track secured variable names
+            $securedVarNames = [];
+            if (!empty($astFindings['secured'])) {
+                foreach ($astFindings['secured'] as $f) {
+                    if (!empty($f['name'])) {
+                        $securedVarNames[] = $f['name'];
+                        if (isset($inputVars[$f['name']])) {
+                            $inputVars[$f['name']]['secured'] = true;
+                            // Also mark any earlier suggestions for this variable as resolved
+                            foreach ($lineTargets as $ln => $target) {
+                                if (in_array($f['name'], $target['vars'] ?? [], true)) {
+                                    unset($lineTargets[$ln]);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Update for htmlspecialchars assignments with null coalesce
+            foreach ($lines as $num => $lineRaw) {
+                $line = trim($lineRaw);
+                if (preg_match('/^\s*(\/\/|#|\/\*|\*|\*\/|<)/', $line)) continue;
+
+                if (preg_match_all('/\$(\w+)\s*=\s*htmlspecialchars\s*\([^)]+\)\s*\?\?\s*[^;]+;/', $line, $matches)) {
+                    foreach ($matches[1] as $var) {
+                        $securedVarNames[] = $var;
+                        if (isset($inputVars[$var])) {
+                            $inputVars[$var]["secured"] = true;
                         }
                     }
                 }
@@ -103,13 +131,7 @@ class SecurityAnalyzer
             $line = trim($lineRaw);
             if (preg_match('/^\s*(\/\/|#|\/\*|\*|\*\/|<)/', $line)) continue;
 
-            foreach ($inputVars as $var => &$info) {
-                $v = preg_quote($var, '/');
-                if (preg_match('/^\s*\$(' . $v . ')\b\s*=\s*htmlspecialchars\s*\(/', $line)) {
-                    $info["secured"] = true;
-                }
-            }
-            unset($info);
+            // htmlspecialchars detection now handled by PhpParserAnalyzer
         }
 
         // --- Step 3: Analyze usage and generate fix suggestions ---
@@ -117,9 +139,7 @@ class SecurityAnalyzer
             $line = trim($lineRaw);
             if (preg_match('/^\s*(\/\/|#|\/\*|\*|\*\/|<)/', $line)) continue;
 
-                if (preg_match('/\barray_keys\s*\(\s*\$_(POST|GET|REQUEST|COOKIE|SESSION)\b/', $line)) {
-                continue;
-            }
+            // array_keys detection now handled by PhpParserAnalyzer
 
             foreach ($inputVars as $var => $info) {
                 if (strpos($line, '$' . $var) === false) continue;
@@ -150,7 +170,47 @@ class SecurityAnalyzer
                     continue;
                 }
 
-                if ($info["secured"]) continue;
+                // Skip if the variable is already secured or was secured earlier
+                if ($info["secured"] || in_array($var, $securedVarNames, true)) {
+                    // Remove any existing suggestion for this variable
+                    unset($lineTargets[$num + 1]);
+                    continue;
+                }
+
+                // Check if this is a database operation
+                $isDatabaseOperation = false;
+                foreach ($astCalls as $c) {
+                    if ($c['line'] === $num + 1 && !empty($c['is_sql'])) {
+                        if ($c['type'] === 'method' && (
+                            strtolower((string)$c['name']) === 'bind_param' ||
+                            strtolower((string)$c['name']) === 'execute' ||
+                            strtolower((string)$c['name']) === 'prepare'
+                        )) {
+                            $isDatabaseOperation = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Skip htmlspecialchars recommendation for database operations
+                if ($isDatabaseOperation) {
+                    continue;
+                }
+
+                // Check if we're in a context that needs escaping (HTML output)
+                $needsEscaping = false;
+                if (preg_match('/\b(?:echo|print|<?=)\b/', $line)) {
+                    $needsEscaping = true;
+                }
+                // Check for template engine usage
+                if (preg_match('/->(?:render|display|view)\s*\(/', $line)) {
+                    $needsEscaping = true;
+                }
+
+                if (!$needsEscaping) {
+                    continue;
+                }
+
                 // if AST says this variable is an array, skip suggestions that would wrap the whole variable
                 if (!empty($info['is_array'])) {
                     // allow suggestions for element access or implode(...) but skip plain $var usage
@@ -177,35 +237,24 @@ class SecurityAnalyzer
                 $isBindParamArg = false;
                 foreach ($astCalls as $c) {
                     if ($c['line'] === $num + 1) {
-                        // method name "bind_param" or function mysqli_stmt_bind_param
-                        if ($c['type'] === 'method' && strtolower((string)$c['name']) === 'bind_param') {
-                            if (in_array($var, $c['vars'], true)) {
-                                $isBindParamArg = true;
+                        // Check if this is a SQL-related call
+                        if (!empty($c['is_sql'])) {
+                            if ($c['type'] === 'method' && strtolower((string)$c['name']) === 'bind_param') {
+                                if (in_array($var, $c['vars'], true)) {
+                                    $isBindParamArg = true;
+                                }
+                            } else {
+                                // Mark as SQL line for query/prepare
+                                $ln = $num + 1;
+                                if (!isset($lineTargets[$ln])) {
+                                    $lineTargets[$ln] = ['code' => trim($line), 'vars' => []];
+                                }
+                                if (!in_array($var, $lineTargets[$ln]['vars'], true)) {
+                                    $lineTargets[$ln]['vars'][] = $var;
+                                }
+                                $lineTargets[$ln]['is_sql'] = true;
+                                continue 2;
                             }
-                        }
-                        // function call mysqli_query — treat as SQL line
-                        if ($c['type'] === 'function' && in_array(strtolower($c['name']), ['mysqli_query','mysql_query'])) {
-                            // mark SQL
-                            $ln = $num + 1;
-                            if (!isset($lineTargets[$ln])) {
-                                $lineTargets[$ln] = ['code' => trim($line), 'vars' => []];
-                            }
-                            if (!in_array($var, $lineTargets[$ln]['vars'], true)) {
-                                $lineTargets[$ln]['vars'][] = $var;
-                            }
-                            $lineTargets[$ln]['is_sql'] = true;
-                            continue 2;
-                        }
-                        if ($c['type'] === 'method' && in_array(strtolower((string)$c['name']), ['query','prepare'])) {
-                            $ln = $num + 1;
-                            if (!isset($lineTargets[$ln])) {
-                                $lineTargets[$ln] = ['code' => trim($line), 'vars' => []];
-                            }
-                            if (!in_array($var, $lineTargets[$ln]['vars'], true)) {
-                                $lineTargets[$ln]['vars'][] = $var;
-                            }
-                            $lineTargets[$ln]['is_sql'] = true;
-                            continue 2;
                         }
                     }
                 }
@@ -240,22 +289,16 @@ class SecurityAnalyzer
             if ($isSql && count($vars) > 0) {
                 // Build a simple mysqli prepared statement suggestion using the detected variables
                 $types = str_repeat('s', count($vars));
-                $params = implode(', ', array_map(function ($n) { return '$' . $n; }, $vars));
+                $params = implode(', ', array_map(function ($n) {
+                    return '$' . $n;
+                }, $vars));
                 $trimLines = '';
                 foreach ($vars as $v) {
                     $trimLines .= '$' . $v . ' = trim($' . $v . ');\n';
                 }
 
-                $prepared = "// Original: " . $code . "\n";
-                $prepared .= "// Suggested: use a prepared statement (mysqli example)\n";
-                $prepared .= "// Replace the SQL below with the original query and use ? placeholders for values.\n";
-                    $prepared .= "\$stmt = \$mysqli->prepare(\"REPLACE_SQL_WITH_PLACEHOLDERS\");\n";
-                    $prepared .= "if (!\$stmt) { /* handle prepare error */ }\n";
-                $prepared .= $trimLines;
-                $prepared .= "\$stmt->bind_param('" . $types . "', " . $params . ");\n";
-                $prepared .= "\$stmt->execute();\n";
-                $prepared .= "\$result = \$stmt->get_result(); // or bind_result/fetch if get_result not available\n";
-                $prepared .= "\$stmt->close();";
+                // Just show a very brief suggestion
+                $prepared = "using prepared statements";
 
                 // format var list as plain comma-separated names (no leading '$')
                 $formattedVarList = '';
@@ -279,19 +322,19 @@ class SecurityAnalyzer
                     $merged = $candidate;
                 }
             }
-                if (trim($merged) !== trim($code)) {
-                    // format var list as plain comma-separated names (no leading '$')
-                    $tmp = $vars;
-                    $formattedVarList2 = '';
+            if (trim($merged) !== trim($code)) {
+                // format var list as plain comma-separated names (no leading '$')
+                $tmp = $vars;
+                $formattedVarList2 = '';
+                if (count($tmp) > 0) {
+                    $first2 = array_shift($tmp);
+                    $formattedVarList2 = $first2;
                     if (count($tmp) > 0) {
-                        $first2 = array_shift($tmp);
-                        $formattedVarList2 = $first2;
-                        if (count($tmp) > 0) {
-                            $formattedVarList2 .= ',' . implode(',', $tmp);
-                        }
+                        $formattedVarList2 .= ',' . implode(',', $tmp);
                     }
-                    $issues[] = ['line' => $ln, 'var' => $formattedVarList2, 'code' => $code, 'fix' => $merged];
                 }
+                $issues[] = ['line' => $ln, 'var' => $formattedVarList2, 'code' => $code, 'fix' => $merged];
+            }
         }
 
         return $issues;
@@ -304,10 +347,71 @@ class SecurityAnalyzer
      * @param string $var The variable name.
      * @return string The suggested fix.
      */
+    private function isSqlContext(string $line): bool
+    {
+        // Ignore lines that are clearly not SQL
+        if (
+            strpos($line, 'echo ') !== false ||
+            strpos($line, 'print ') !== false ||
+            strpos($line, '<?=') !== false ||
+            preg_match('/[\'"]>\s*\$/', $line)
+        ) { // HTML context
+            return false;
+        }
+
+        // Must have SQL-like structure
+        $hasQueryStructure = false;
+
+        // Major SQL keywords that indicate a query
+        $majorKeywords = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'FROM', 'JOIN'];
+        foreach ($majorKeywords as $keyword) {
+            if (stripos($line, $keyword) !== false) {
+                $hasQueryStructure = true;
+                break;
+            }
+        }
+
+        // Check for WHERE clause construction
+        if (
+            stripos($line, 'WHERE') !== false ||
+            preg_match('/\$(?:where|filter).*query\s*=/', $line) ||
+            (stripos($line, 'AND') !== false && preg_match('/\$(?:filters)\[\]/', $line))
+        ) {
+            $hasQueryStructure = true;
+        }
+
+        if (!$hasQueryStructure) {
+            return false;
+        }
+
+        // Additional checks for SQL context
+        $sqlIndicators = [
+            // Must have database-related patterns
+            '/\b(?:query|prepare|execute)\s*\(/',
+            '/\$(?:sql|stmt|query)\b/',
+            '/\$(?:filters|conditions)\[\].*(?:LIKE|BETWEEN|IN)/',
+            '/(?:LEFT|RIGHT|INNER)\s+JOIN/',
+            '/\bWHERE\b.*(?:\$[a-zA-Z_][a-zA-Z0-9_]*|:[a-zA-Z_][a-zA-Z0-9_]*)/'
+        ];
+
+        foreach ($sqlIndicators as $pattern) {
+            if (preg_match($pattern, $line)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function generateFixSuggestion(string $line, string $var): string
     {
         $trimmedLine = rtrim($line);
         $v = preg_quote($var, '/');
+
+        // Check if this is a SQL context
+        if ($this->isSqlContext($trimmedLine)) {
+            return "using prepared statements";
+        }
 
         // If the only occurrence(s) of the variable on this line are inside
         // a function/closure/arrow parameter list, don't suggest wrapping it
