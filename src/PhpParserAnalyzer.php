@@ -38,10 +38,10 @@ class PhpParserAnalyzer
             private function addUnnecessaryHtmlspecialcharsWarning(Node $node, string $reason): void
             {
                 $this->unnecessaryHtmlspecialcharsWarnings[] = [
-                    'line' => $node->getStartLine(),
+                    'line' => $node->getLine(),
                     'message' => 'Unnecessary htmlspecialchars usage',
                     'detail' => $reason,
-                    'type' => 'unnecessary_htmlspecialchars'
+                    'type' => 'xss'
                 ];
             }
 
@@ -52,7 +52,17 @@ class PhpParserAnalyzer
 
             public function getWarnings(): array
             {
-                return array_merge($this->warnings, $this->unnecessaryHtmlspecialcharsWarnings);
+                // Set all htmlspecialchars warnings to XSS type
+                $finalWarnings = array_map(function($warning) {
+                    if (isset($warning['message']) && 
+                        (stripos($warning['message'], 'htmlspecialchars') !== false ||
+                         stripos($warning['detail'] ?? '', 'htmlspecialchars') !== false)) {
+                        $warning['type'] = 'xss';
+                    }
+                    return $warning;
+                }, $this->warnings);
+
+                return array_merge($finalWarnings, $this->unnecessaryHtmlspecialcharsWarnings);
             }
 
             private function collectVarsFromExpr($expr)
@@ -367,6 +377,7 @@ class PhpParserAnalyzer
                             // Add concise warning about SQL injection
                             $this->warnings[] = [
                                 'line' => $node->getLine(),
+                                'type' => 'sql_injection',
                                 'message' => 'Using prepared statements is recommended',
                                 'suggestion' => 'Use: $stmt = $db->prepare("..."); $stmt->bind_param("s", $var);'
                             ];
@@ -377,6 +388,13 @@ class PhpParserAnalyzer
                                 if ($this->isHtmlOutputContext($checkNode)) {
                                     $needsEscaping = true;
                                     $reason[] = 'html_output_context';
+                                    // Add XSS warning
+                                    $this->warnings[] = [
+                                        'line' => $node->getLine(),
+                                        'type' => 'xss',
+                                        'message' => 'Potential XSS vulnerability detected',
+                                        'suggestion' => 'Use htmlspecialchars() to prevent XSS attacks'
+                                    ];
                                     break;
                                 }
                                 if ($this->isDatabaseOperation($checkNode)) {

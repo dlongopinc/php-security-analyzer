@@ -13,19 +13,82 @@ class SecurityAnalyzer
      * @param string $dir The directory to analyze.
      * @return array An array of file paths.
      */
+    /**
+     * List of folders and files to exclude from analysis
+     */
+    private $excludedPaths = [
+        'vendor',
+        'node_modules',
+        'tests',
+        'test',
+        'cache',
+        '.git',
+        '.github',
+        '.vscode',
+        'storage/logs',
+        'storage/framework',
+        'bootstrap/cache',
+    ];
+
+    /**
+     * List of specific files to exclude
+     */
+    private $excludedFiles = [
+        'autoload.php',
+        'index.php',  // Excluding framework default files
+        'server.php',
+        'artisan',
+    ];
+
+    /**
+     * Checks if a path should be excluded from analysis
+     */
+    private function shouldExclude(string $path): bool
+    {
+        // Convert path separators to forward slashes for consistent comparison
+        $normalizedPath = str_replace('\\', '/', $path);
+        
+        // Check excluded folders
+        foreach ($this->excludedPaths as $excludedPath) {
+            if (strpos($normalizedPath, '/' . $excludedPath . '/') !== false) {
+                return true;
+            }
+        }
+
+        // Check excluded files
+        $filename = basename($path);
+        if (in_array(strtolower($filename), array_map('strtolower', $this->excludedFiles))) {
+            return true;
+        }
+
+        return false;
+    }
+
     public function analyzePhpFiles(string $dir): array
     {
-        $rii = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir));
+        $rii = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS)
+        );
         $files = [];
 
         foreach ($rii as $file) {
             if ($file->isDir()) {
                 continue;
             }
-            if (pathinfo($file->getPathname(), PATHINFO_EXTENSION) === 'php') {
-                $files[] = $file->getPathname();
+
+            $pathname = $file->getPathname();
+            
+            // Skip excluded paths and files
+            if ($this->shouldExclude($pathname)) {
+                continue;
+            }
+
+            // Only analyze PHP files
+            if (pathinfo($pathname, PATHINFO_EXTENSION) === 'php') {
+                $files[] = $pathname;
             }
         }
+        
         return $files;
     }
 

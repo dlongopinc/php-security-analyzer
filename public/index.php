@@ -160,10 +160,10 @@ foreach ($files as $file) {
             /* Biru muda untuk HTML output */
         }
 
-        .table>tbody>tr.type-unnecessary_htmlspecialchars,
-        .table>tbody>tr.type-unnecessary_htmlspecialchars>td {
+        .table>tbody>tr.type-xss,
+        .table>tbody>tr.type-xss>td {
             background-color: #fff3cd !important;
-            /* Kuning muda untuk unnecessary htmlspecialchars */
+            /* Kuning muda untuk XSS vulnerability */
         }
 
         .table>tbody>tr.type-parse_error,
@@ -258,33 +258,49 @@ foreach ($files as $file) {
             <?php
             function getRecommendationType($issue)
             {
-                if (isset($issue['type'])) {
+                // Debug output
+                echo "<!-- Debug issue: " . htmlspecialchars(print_r($issue, true)) . " -->\n";
+
+                // Check if type is already set
+                if (isset($issue['type']) && $issue['type'] !== 'other') {
                     return $issue['type'];
                 }
-                if (isset($issue['message'])) {
-                    if (strpos($issue['message'], 'prepared statements') !== false) {
+
+                // Check suggestion for htmlspecialchars (XSS)
+                if (isset($issue['fix']) && stripos($issue['fix'], 'htmlspecialchars') !== false) {
+                    return 'xss';
+                }
+
+                // Check suggestion for SQL injection
+                if (isset($issue['suggestion']) && (
+                    stripos($issue['suggestion'], 'prepared') !== false ||
+                    stripos($issue['suggestion'], 'bind_param') !== false
+                )) {
+                    return 'sql_injection';
+                }
+
+                // Check message for SQL
+                if (isset($issue['message']) && (
+                    stripos($issue['message'], 'prepared') !== false ||
+                    stripos($issue['message'], 'bind_param') !== false
+                )) {
+                    return 'sql_injection';
+                }
+
+                // Check code context for SQL
+                if (isset($issue['code'])) {
+                    if (preg_match('/\b(?:SELECT|INSERT|UPDATE|DELETE|PREPARE)\b/i', $issue['code']) ||
+                        stripos($issue['code'], 'query') !== false ||
+                        stripos($issue['code'], 'mysqli') !== false) {
                         return 'sql_injection';
                     }
-                    if (strpos($issue['message'], 'htmlspecialchars') !== false) {
-                        return 'html_output';
-                    }
                 }
+
+                // Check for parse error
                 if (isset($issue['error']) && $issue['error'] === 'parse_error') {
                     return 'parse_error';
                 }
-                // Tambahan pengecekan untuk menentukan tipe berdasarkan kode atau konteks
-                if (isset($issue['code'])) {
-                    if (
-                        preg_match('/\b(?:SELECT|INSERT|UPDATE|DELETE)\b/i', $issue['code']) ||
-                        stripos($issue['code'], 'mysqli_query') !== false ||
-                        stripos($issue['code'], '->query(') !== false
-                    ) {
-                        return 'sql_injection';
-                    }
-                    if (stripos($issue['code'], 'htmlspecialchars') !== false) {
-                        return 'html_output';
-                    }
-                }
+
                 return 'other';
             }
             ?>
@@ -317,8 +333,11 @@ foreach ($files as $file) {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            <?php foreach ($issues as $issue) :
+                                            <?php foreach ($issues as $issue) : 
+                                                // Debug: Print issue content
+                                                echo "<!-- Debug: " . htmlspecialchars(print_r($issue, true)) . " -->";
                                                 $type = getRecommendationType($issue);
+                                                echo "<!-- Type detected: " . htmlspecialchars($type) . " -->";
                                             ?>
                                                 <tr class="type-<?= htmlspecialchars($type) ?>">
                                                     <td><?= ucfirst(str_replace('_', ' ', $type)) ?></td>
